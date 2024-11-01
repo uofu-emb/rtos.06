@@ -51,7 +51,7 @@ jobs:
         working-directory: ${{github.workspace}}/build/test
         shell: bash
         # Make sure to set the correct elf file
-        run: openocd -s $OPENOCD_PATH -f interface/cmsis-dap.cfg -f target/rp2040.cfg -c 'adapter speed 5000; program "mytest.elf" verify reset exit'
+        run: openocd -s $OPENOCD_PATH -f interface/cmsis-dap.cfg -f target/rp2040.cfg -c 'adapter speed 5000; program "test_schedule.elf" verify reset exit'
       - name: Test
         working-directory: ${{github.workspace}}
         shell: bash
