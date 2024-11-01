@@ -8,9 +8,15 @@
 #include <unity.h>
 #include "helper.c"
 
+configRUN_TIME_COUNTER_TYPE first_stats, second_stats, elapsed_stats;
+TickType_t elapsed_ticks;
+
 void setUp(void) {}
 
-void tearDown(void) {}
+void tearDown(void) {
+    printf("primary %lld secondary %lld elapsed %lld (us) in %d ticks\n",
+           first_stats, second_stats, elapsed_stats, elapsed_ticks);
+}
 
 void busy_busy(void *args)
 {
@@ -24,16 +30,14 @@ void busy_yield(void *args)
     char *name = (char *)args;
     printf("start busy_yield %s\n", name);
     for (int i = 0; ; i++) {
-        if (!(i & 0xFF)) {
-            taskYIELD();
-        }
+        taskYIELD();
     }
 }
 
 void busy_sleep(void *args)
 {
     char *name = (char *)args;
-    printf("start busy_busy %s\n", name);
+    printf("start busy_sleep %s\n", name);
     busy_wait_us(10000);
     sleep_ms(490);
 }
@@ -43,159 +47,71 @@ void priority_inversion(void *args)
 {
     char *name = (char *)args;
     printf("start priority inversion %s\n", name);
-    xSemaphoreTake(semaphore, portMAX_DELAY);
-    printf("got semaphore %s\n", name);
-    for (int i = 0; ; i++);
+    while (1) {
+        xSemaphoreTake(semaphore, portMAX_DELAY);
+        /* printf("got semaphore %s\n", name); */
+        busy_wait_us(100000);
+        xSemaphoreGive(semaphore);
+    }
 }
 
 void test_priority_inversion(void)
 {
-    configRUN_TIME_COUNTER_TYPE high_stats, low_stats, elapsed_stats, elapsed_ticks;
     semaphore = xSemaphoreCreateBinary();
-
-    run_analyzer(priority_inversion,
-                 /*PREEMPT*/tskIDLE_PRIORITY+(3), 0, &low_stats,
-                 /*PREEMPT*/tskIDLE_PRIORITY+(4), 1, &high_stats,
+    run_analyzer(priority_inversion, tskIDLE_PRIORITY+(3), 0, &first_stats,
+                 priority_inversion, tskIDLE_PRIORITY+(4), 1, &second_stats,
                  &elapsed_stats, &elapsed_ticks);
-    TEST_ASSERT_LESS_THAN_INT64(2000, high_stats);
-    TEST_ASSERT_GREATER_THAN_INT64(4500000, low_stats);
+    TEST_ASSERT(1000 > first_stats);
+    TEST_ASSERT(1000 > second_stats);
     vSemaphoreDelete(semaphore);
 }
 
-void test_coop__no_priority__no_yield(void)
+void test_mutex_inversion(void)
 {
-    configRUN_TIME_COUNTER_TYPE first_stats, second_stats, elapsed_stats, elapsed_ticks;
-    run_analyzer(busy_busy,
-                 /*COOP*/tskIDLE_PRIORITY+(3), 0, &first_stats,
-                 /*COOP*/tskIDLE_PRIORITY+(3), 1, &second_stats,
+    semaphore = xSemaphoreCreateMutex();
+    run_analyzer(priority_inversion, tskIDLE_PRIORITY+(3), 0, &first_stats,
+                 priority_inversion, tskIDLE_PRIORITY+(4), 1, &second_stats,
                  &elapsed_stats, &elapsed_ticks);
-    TEST_ASSERT_EQUAL_UINT64(0, second_stats);
-    TEST_ASSERT_UINT64_WITHIN(400000, 5500000, first_stats);
+    TEST_ASSERT(120000 > first_stats);
+    TEST_ASSERT(4000000 < second_stats);
+    vSemaphoreDelete(semaphore);
 }
 
-void test_preempt__no_priority__no_yield(void)
+void test_no_priority__no_yield(void)
 {
-    configRUN_TIME_COUNTER_TYPE first_stats, second_stats, elapsed_stats, elapsed_ticks;
-    run_analyzer(busy_busy,
-                 /*PREEMPT*/tskIDLE_PRIORITY+(3), 0, &first_stats,
-                 /*PREEMPT*/tskIDLE_PRIORITY+(3), 1, &second_stats,
+    run_analyzer(busy_busy, tskIDLE_PRIORITY+(3), 0, &first_stats,
+                 busy_busy, tskIDLE_PRIORITY+(3), 0, &second_stats,
                  &elapsed_stats, &elapsed_ticks);
-    TEST_ASSERT_EQUAL_UINT64(0, second_stats);
-    TEST_ASSERT_UINT64_WITHIN(100000, 5000000, first_stats);
+    TEST_ASSERT(2000000 < first_stats);
+    TEST_ASSERT(2000000 < second_stats);
 }
 
-void test_coop__no_priority__yield(void)
+void test_no_priority__yield(void)
 {
-    configRUN_TIME_COUNTER_TYPE first_stats, second_stats, elapsed_stats, elapsed_ticks;
-    run_analyzer(busy_yield,
-                 /*COOP*/tskIDLE_PRIORITY+(3), 0, &first_stats,
-                 /*COOP*/tskIDLE_PRIORITY+(3), 0, &second_stats,
+    run_analyzer(busy_busy, tskIDLE_PRIORITY+(3), 0, &first_stats,
+                 busy_yield, tskIDLE_PRIORITY+(3), 0, &second_stats,
                  &elapsed_stats, &elapsed_ticks);
-    TEST_ASSERT_UINT64_WITHIN(100000, 2500000, first_stats);
-    TEST_ASSERT_UINT64_WITHIN(100000, 2500000, second_stats);
+    TEST_ASSERT(first_stats > second_stats);
+    TEST_ASSERT(first_stats > 4400000);
+    TEST_ASSERT(20000 > second_stats);
 }
 
-void test_preempt__no_priority__yield(void)
+void test_priority__low_first(void)
 {
-    configRUN_TIME_COUNTER_TYPE first_stats, second_stats, elapsed_stats, elapsed_ticks;
-    run_analyzer(busy_yield,
-                 /*PREEMPT*/tskIDLE_PRIORITY+(3), 0, &first_stats,
-                 /*PREEMPT*/tskIDLE_PRIORITY+(3), 0, &second_stats,
+    run_analyzer(busy_busy, tskIDLE_PRIORITY+(3), 0, &first_stats,
+                 busy_busy, tskIDLE_PRIORITY+(4), 1, &second_stats,
                  &elapsed_stats, &elapsed_ticks);
-    TEST_ASSERT_UINT64_WITHIN(100000, 2500000, first_stats);
-    TEST_ASSERT_UINT64_WITHIN(100000, 2500000, second_stats);
+    TEST_ASSERT(1000 > first_stats);
+    TEST_ASSERT(4500000 < second_stats);
 }
 
-void test_coop__priority_low_first__no_yield(void)
+void test_priority__high_first(void)
 {
-    configRUN_TIME_COUNTER_TYPE high_stats, low_stats, elapsed_stats, elapsed_ticks;
-    run_analyzer(busy_busy,
-                 /*COOP*/tskIDLE_PRIORITY+(2), 0, &low_stats,
-                 /*COOP*/tskIDLE_PRIORITY+(3), 1, &high_stats,
+    run_analyzer(busy_busy, tskIDLE_PRIORITY+(4), 0, &first_stats,
+                 busy_busy, tskIDLE_PRIORITY+(3), 1, &second_stats,
                  &elapsed_stats, &elapsed_ticks);
-    TEST_ASSERT_EQUAL_UINT64(0, high_stats);
-    TEST_ASSERT_UINT64_WITHIN(100000, 5000000, low_stats);
-}
-
-void test_coop__priority_high_first__no_yield(void)
-{
-    configRUN_TIME_COUNTER_TYPE high_stats, low_stats, elapsed_stats, elapsed_ticks;
-    run_analyzer(busy_busy,
-                 /*COOP*/tskIDLE_PRIORITY+(2), 1, &low_stats,
-                 /*COOP*/tskIDLE_PRIORITY+(3), 0, &high_stats,
-                 &elapsed_stats, &elapsed_ticks);
-    TEST_ASSERT_EQUAL_UINT64(0, low_stats);
-    TEST_ASSERT_UINT64_WITHIN(100000, 5000000, high_stats);
-}
-
-void test_coop__priority_low_first__yield(void)
-{
-    configRUN_TIME_COUNTER_TYPE low_stats, high_stats, elapsed_stats, elapsed_ticks;
-    run_analyzer(busy_yield,
-                 /*COOP*/tskIDLE_PRIORITY+(2), 0, &low_stats,
-                 /*COOP*/tskIDLE_PRIORITY+(3), 1, &high_stats,
-                 &elapsed_stats, &elapsed_ticks);
-    TEST_ASSERT_UINT64_WITHIN(5000, 0, low_stats);
-    TEST_ASSERT_UINT64_WITHIN(100000, 5000000, high_stats);
-}
-
-void test_coop__priority_high_first__yield(void)
-{
-    configRUN_TIME_COUNTER_TYPE low_stats, high_stats, elapsed_stats, elapsed_ticks;
-    run_analyzer(busy_yield,
-                 /*COOP*/tskIDLE_PRIORITY+(2), 0, &low_stats,
-                 /*COOP*/tskIDLE_PRIORITY+(3), 1, &high_stats,
-                 &elapsed_stats, &elapsed_ticks);
-    TEST_ASSERT_UINT64_WITHIN(5000, 0, low_stats);
-    TEST_ASSERT_UINT64_WITHIN(100000, 5000000, high_stats);
-}
-
-void test_preempt__priority__no_yield(void)
-{
-    configRUN_TIME_COUNTER_TYPE low_stats, high_stats, elapsed_stats, elapsed_ticks;
-    run_analyzer(busy_busy,
-                 /*PREEMPT*/tskIDLE_PRIORITY+(2), 0, &low_stats,
-                 /*PREEMPT*/tskIDLE_PRIORITY+(3), 0, &high_stats,
-                 &elapsed_stats, &elapsed_ticks);
-    TEST_ASSERT_UINT64_WITHIN(5000, 0, low_stats);
-    TEST_ASSERT_UINT64_WITHIN(100000, 5000000, high_stats);
-}
-
-void test_preempt__priority__yield(void)
-{
-    configRUN_TIME_COUNTER_TYPE low_stats, high_stats, elapsed_stats, elapsed_ticks;
-    run_analyzer(busy_yield,
-                 /*PREEMPT*/tskIDLE_PRIORITY+(2), 0, &low_stats,
-                 /*PREEMPT*/tskIDLE_PRIORITY+(3), 0, &high_stats,
-                 &elapsed_stats, &elapsed_ticks);
-    TEST_ASSERT_UINT64_WITHIN(5000, 0, low_stats);
-    TEST_ASSERT_UINT64_WITHIN(100000, 5000000, high_stats);
-}
-
-
-void test_mix__priority__yield(void)
-{
-    configRUN_TIME_COUNTER_TYPE low_stats, high_stats, elapsed_stats, elapsed_ticks;
-    run_analyzer(busy_yield,
-                 /*PREEMPT*/tskIDLE_PRIORITY+(3), 0, &low_stats,
-                 /*COOP*/tskIDLE_PRIORITY+(3), 1, &high_stats,
-                 &elapsed_stats, &elapsed_ticks);
-    TEST_ASSERT_UINT64_WITHIN(5000, 0, low_stats);
-    TEST_ASSERT_UINT64_WITHIN(100000, 5000000, high_stats);
-}
-
-
-void test_preempt__priority__sleepy(void)
-{
-    configRUN_TIME_COUNTER_TYPE low_stats, high_stats, elapsed_stats, elapsed_ticks;
-    run_analyzer_split(5000,
-                       busy_busy,
-                       /*PREEMPT*/tskIDLE_PRIORITY+(2), 0, &low_stats,
-                       busy_sleep,
-                       /*PREEMPT*/tskIDLE_PRIORITY+(3), 0, &high_stats,
-                       &elapsed_stats, &elapsed_ticks);
-    TEST_ASSERT_UINT64_WITHIN(1000, 10000, high_stats);
-    TEST_ASSERT_UINT64_WITHIN(100000, 5000000, low_stats);
+    TEST_ASSERT(4500000 < first_stats);
+    TEST_ASSERT(1000 > second_stats);
 }
 
 void main_thread (void *args)
@@ -203,21 +119,11 @@ void main_thread (void *args)
     while (1) {
         UNITY_BEGIN();
         RUN_TEST(test_priority_inversion);
-        /* RUN_TEST(test_coop__no_priority__no_yield); */
-        /* RUN_TEST(test_preempt__no_priority__no_yield); */
-
-        /* RUN_TEST(test_coop__no_priority__yield); */
-        /* RUN_TEST(test_preempt__no_priority__yield); */
-
-        /* RUN_TEST(test_coop__priority_low_first__no_yield); */
-        /* RUN_TEST(test_coop__priority_high_first__no_yield); */
-
-        /* RUN_TEST(test_coop__priority_low_first__yield); */
-        /* RUN_TEST(test_coop__priority_high_first__yield); */
-
-        /* RUN_TEST(test_preempt__priority__no_yield); */
-        /* RUN_TEST(test_preempt__priority__yield); */
-        /* RUN_TEST(test_preempt__priority__sleepy); */
+        RUN_TEST(test_mutex_inversion);
+        RUN_TEST(test_no_priority__no_yield);
+        RUN_TEST(test_no_priority__yield);
+        RUN_TEST(test_priority__low_first);
+        RUN_TEST(test_priority__high_first);
         UNITY_END();
         vTaskDelay(1000);
     }
